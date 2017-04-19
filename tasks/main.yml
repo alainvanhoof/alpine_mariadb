@@ -1,0 +1,120 @@
+---
+# tasks file for alpine_mariadb
+
+- name: Install MariaDB
+  apk:
+    name: mariadb
+    state: present
+    update_cache: yes
+
+- name: Install MariaDB Client
+  apk:
+    name: mariadb-client
+    state: present
+    update_cache: yes
+
+- name: Install MariaDB Python module
+  apk:
+    name: py-mysqldb
+    state: present
+    update_cache: yes
+
+- name: Listen on socket only
+  ini_file:
+    dest: '/etc/mysql/my.cnf'
+    section: mysqld
+    option: skip-networking
+    value: on
+  when: mariadb_listen_addr is undefined
+  notify: Restart mariadb
+
+- name: Change listen address
+  ini_file:
+    dest: '/etc/mysql/my.cnf'
+    section: mysqld
+    option: bind-address
+    value: "{{ mariadb_listen_addr }}"
+  when: mariadb_listen_addr is defined
+  notify: Restart mariadb
+
+- name: Listen NOT on socket only
+  ini_file:
+    dest: '/etc/mysql/my.cnf'
+    section: mysqld
+    option: skip-networking
+    value: off
+  when: mariadb_listen_addr is defined
+  notify: Restart mariadb
+
+- name: Set server-id to 2 on slave
+  ini_file:
+    dest: '/etc/mysql/my.cnf'
+    section: mysqld
+    option: server-id
+    value: 2
+  when: mariadb_slave is defined
+  notify: Restart mariadb
+
+- name: Set Database {{ mariadb_name }} to replicate
+  ini_file:
+    dest: '/etc/mysql/my.cnf'
+    section: mysqld
+    option: replicate-do-db
+    value: "{{ mariadb_name }}"
+  when: mariadb_slave is defined or mariadb_master is defined
+  notify: Restart mariadb
+
+- name: Copy master.sql
+  template:
+    src: master.sql.j2
+    dest: /root/init.sql
+  when: mariadb_master is defined
+
+- name: Copy slave.sql
+  template:
+    src: slave.sql.j2
+    dest: /root/init.sql
+  when: mariadb_slave is defined
+  
+- name: Init MariaDB
+  shell: "/etc/init.d/mariadb setup"
+  args:
+    creates: /var/lib/mysql/mysql/
+
+- name: Start MariaDB
+  service:
+    name: mariadb
+    state: started
+    enabled: true
+
+- name: Remove default test Database
+  mysql_db:
+    name: test
+    state: absent
+
+- name: Create MariaDB database {{ mariadb_name }}
+  mysql_db:
+    name: "{{ mariadb_name }}"
+    state: present
+  when: 
+    - mariadb_name is defined
+    - mariadb_slave is undefined
+
+- name: Create MariaDB User {{ mariadb_user }} of {{ mariadb_name }}
+  mysql_user:
+    name: "{{ mariadb_user }}"
+    password: "{{ mariadb_pass }}"
+    priv: '{{ mariadb_name }}.*:ALL'
+    state: present
+  when:
+    - mariadb_pass is defined
+    - mariadb_user is defined
+    - mariadb_name is defined
+    - mariadb_slave is undefined
+    
+- name: Init master and slave
+  shell: "/usr/bin/mysql < /root/init.sql && touch /root/init.done"
+  args:
+    creates: /root/init.done
+  when: mariadb_master is defined or mariadb_slave is defined
+...
